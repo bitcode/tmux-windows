@@ -213,7 +213,11 @@ tty_read_callback(__unused int fd, __unused short events, void *data)
 	size_t		 size = EVBUFFER_LENGTH(tty->in);
 	int		 nread;
 
+#ifdef PLATFORM_WINDOWS
+	nread = evbuffer_read(tty->in, (int)win32_get_real_socket(c->fd), -1);
+#else
 	nread = evbuffer_read(tty->in, c->fd, -1);
+#endif
 	if (nread == 0 || nread == -1) {
 		if (nread == 0)
 			log_debug("%s: read closed", name);
@@ -292,10 +296,20 @@ tty_write_callback(__unused int fd, __unused short events, void *data)
 #endif
 
 	nwrite = -1;
-	if (c->fd != -1)
-		nwrite = evbuffer_write(tty->out, c->fd);
+	if (c->fd != -1) {
 #ifdef PLATFORM_WINDOWS
-	else {
+		/*
+		 * evbuffer_write calls send() inside libevent which doesn't
+		 * know about our fd-offset mapping.  Pass the real SOCKET.
+		 */
+		SOCKET rs = win32_get_real_socket(c->fd);
+		nwrite = evbuffer_write(tty->out, (int)rs);
+#else
+		nwrite = evbuffer_write(tty->out, c->fd);
+#endif
+	}
+#ifdef PLATFORM_WINDOWS
+	if (nwrite == -1 && c->fd == -1) {
 		size_t len = EVBUFFER_LENGTH(tty->out);
 		if (len > 0) {
 			unsigned char *ptr = evbuffer_pullup(tty->out, len);
