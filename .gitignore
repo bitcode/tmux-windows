@@ -3,9 +3,9 @@ build/
 cmake-build-*/
 out/
 
-# Generated files (from bison/yacc)
-cmd-parse.c
-cmd-parse.h
+# Generated files (from bison/yacc) — cmd-parse.c/.h are pre-generated and committed
+# cmd-parse.c
+# cmd-parse.h
 
 # Autotools artifacts (not used on Windows, but kept for upstream compat)
 *.core
