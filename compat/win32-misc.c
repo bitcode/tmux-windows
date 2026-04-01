@@ -321,7 +321,7 @@ win32_translate_path(const char *path)
     } else if (strncmp(path, "/dev/null", 9) == 0) {
         strcpy(buf, "NUL");
     } else if (strncmp(path, "/dev/tty", 8) == 0) {
-        strcpy(buf, "CON");
+        strcpy(buf, "CONIN$");
     } else if (path[0] == '~') {
         const char *home = getenv("USERPROFILE");
         if (home == NULL)

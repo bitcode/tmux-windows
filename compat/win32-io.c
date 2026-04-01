@@ -358,6 +358,14 @@ win32_ttyname(int fd)
     if (!win32_isatty(fd))
         return NULL;
 
-    snprintf(name, sizeof(name), "CON");
+    /*
+     * Return fd-specific names so stdin/stdout/stderr have distinct identities.
+     * CONIN$ / CONOUT$ are the canonical Windows console device names and work
+     * correctly under ConPTY where plain "CON" may fail to open.
+     */
+    if (fd == STDIN_FILENO)
+        snprintf(name, sizeof(name), "CONIN$");
+    else
+        snprintf(name, sizeof(name), "CONOUT$");
     return name;
 }

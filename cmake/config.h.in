@@ -78,7 +78,7 @@
 #define _PATH_BSHELL "cmd.exe"
 #define _PATH_TMP "C:\\Windows\\Temp\\"
 #define _PATH_DEVNULL "NUL"
-#define _PATH_TTY "CON"
+#define _PATH_TTY "CONIN$"
 #define _PATH_DEV ""
 #define _PATH_DEFPATH ""
 #define _PATH_VI "notepad.exe"
