@@ -1,0 +1,68 @@
+# Build directories
+build/
+cmake-build-*/
+out/
+
+# Generated files (from bison/yacc)
+cmd-parse.c
+cmd-parse.h
+
+# Autotools artifacts (not used on Windows, but kept for upstream compat)
+*.core
+*.dSYM
+*.o
+*.swp
+*~
+.deps/
+.dirstamp
+Makefile
+Makefile.in
+aclocal.m4
+autom4te.cache/
+config.log
+config.status
+configure
+compat/.dirstamp
+
+# IDE and Editor files
+.vscode/
+.idea/
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+.vs/
+*.suo
+*.opensdf
+*.sdf
+tags
+
+# Windows artifacts
+Thumbs.db
+Desktop.ini
+
+# Binary Artifacts
+*.exe
+*.lib
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.idb
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+*.cmake
+!CMakeLists.txt
+
+# Tmux runtime files (server sockets)
+default
+default.lock
+
+# Logs and Debug
+debug.log
+*.log
+build_error.txt
+imsg_*.txt

@@ -1,0 +1,124 @@
+name: Windows Build
+
+on:
+  push:
+    branches: [ master ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Cache libevent
+      id: cache-libevent
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/libevent-install
+        key: libevent-2.1-msvc-${{ runner.os }}
+
+    - name: Build libevent
+      if: steps.cache-libevent.outputs.cache-hit != 'true'
+      shell: cmd
+      run: |
+        git clone --depth 1 --branch release-2.1.12-stable https://github.com/libevent/libevent.git libevent-src
+        cmake -B libevent-build -S libevent-src ^
+              -DEVENT__LIBRARY_TYPE=STATIC ^
+              -DEVENT__DISABLE_TESTS=ON ^
+              -DEVENT__DISABLE_SAMPLES=ON ^
+              -DCMAKE_INSTALL_PREFIX=${{ runner.temp }}/libevent-install
+        cmake --build libevent-build --config Release
+        cmake --install libevent-build --config Release
+
+    - name: Configure tmux
+      shell: cmd
+      run: |
+        cmake -B build -DLIBEVENT_ROOT=${{ runner.temp }}/libevent-install
+
+    - name: Build tmux
+      shell: cmd
+      run: |
+        cmake --build build --config Release
+
+    - name: Verify outputs
+      shell: cmd
+      run: |
+        dir build\Release\tmux.exe
+        dir build\Release\tmux-signal-proxy.exe
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: tmux-windows-${{ github.sha }}
+        path: |
+          build/Release/tmux.exe
+          build/Release/tmux-signal-proxy.exe
+
+  release:
+    needs: build
+    runs-on: windows-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Cache libevent
+      id: cache-libevent
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/libevent-install
+        key: libevent-2.1-msvc-${{ runner.os }}
+
+    - name: Build libevent
+      if: steps.cache-libevent.outputs.cache-hit != 'true'
+      shell: cmd
+      run: |
+        git clone --depth 1 --branch release-2.1.12-stable https://github.com/libevent/libevent.git libevent-src
+        cmake -B libevent-build -S libevent-src ^
+              -DEVENT__LIBRARY_TYPE=STATIC ^
+              -DEVENT__DISABLE_TESTS=ON ^
+              -DEVENT__DISABLE_SAMPLES=ON ^
+              -DCMAKE_INSTALL_PREFIX=${{ runner.temp }}/libevent-install
+        cmake --build libevent-build --config Release
+        cmake --install libevent-build --config Release
+
+    - name: Configure and build tmux
+      shell: cmd
+      run: |
+        cmake -B build -DLIBEVENT_ROOT=${{ runner.temp }}/libevent-install
+        cmake --build build --config Release
+
+    - name: Package release
+      shell: pwsh
+      run: |
+        $tag = "${{ github.ref_name }}"
+        $zip = "tmux-windows-${tag}.zip"
+        Compress-Archive -Path build/Release/tmux.exe, build/Release/tmux-signal-proxy.exe -DestinationPath $zip
+        echo "ZIP=$zip" >> $env:GITHUB_ENV
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: ${{ env.ZIP }}
+        generate_release_notes: true
+        body: |
+          ## tmux for Windows ${{ github.ref_name }}
+
+          ### Installation
+
+          1. Download `tmux-windows-${{ github.ref_name }}.zip`
+          2. Extract both files to a directory on your `PATH`
+          3. Both `tmux.exe` and `tmux-signal-proxy.exe` must be in the same directory
+
+          ### Requirements
+          - Windows 10 build 17763 (version 1809) or later
+          - Windows Terminal recommended
+
+          ### Config
+          Config file: `%APPDATA%\tmux\tmux.conf`
