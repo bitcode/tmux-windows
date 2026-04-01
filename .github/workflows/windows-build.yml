@@ -20,7 +20,7 @@ jobs:
       uses: actions/cache@v4
       with:
         path: ${{ runner.temp }}/libevent-install
-        key: libevent-2.1-msvc-${{ runner.os }}
+        key: libevent-2.1-msvc-mt-${{ runner.os }}
 
     - name: Build libevent
       if: steps.cache-libevent.outputs.cache-hit != 'true'
@@ -31,6 +31,7 @@ jobs:
               -DEVENT__LIBRARY_TYPE=STATIC ^
               -DEVENT__DISABLE_TESTS=ON ^
               -DEVENT__DISABLE_SAMPLES=ON ^
+              -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded ^
               -DCMAKE_INSTALL_PREFIX=${{ runner.temp }}/libevent-install
         cmake --build libevent-build --config Release
         cmake --install libevent-build --config Release
@@ -75,7 +76,7 @@ jobs:
       uses: actions/cache@v4
       with:
         path: ${{ runner.temp }}/libevent-install
-        key: libevent-2.1-msvc-${{ runner.os }}
+        key: libevent-2.1-msvc-mt-${{ runner.os }}
 
     - name: Build libevent
       if: steps.cache-libevent.outputs.cache-hit != 'true'
@@ -86,6 +87,7 @@ jobs:
               -DEVENT__LIBRARY_TYPE=STATIC ^
               -DEVENT__DISABLE_TESTS=ON ^
               -DEVENT__DISABLE_SAMPLES=ON ^
+              -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded ^
               -DCMAKE_INSTALL_PREFIX=${{ runner.temp }}/libevent-install
         cmake --build libevent-build --config Release
         cmake --install libevent-build --config Release
