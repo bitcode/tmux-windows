@@ -83,7 +83,7 @@ Source: "..\example_tmux.conf"; DestDir: "{app}"; DestName: "tmux.conf.example";
 ; User PATH — added when installing for current user only
 Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; \
     ValueData: "{olddata};{app}"; \
-    Check: not IsAdminInstallMode and NeedsPath(HKCU, 'Environment', ExpandConstant('{app}')); \
+    Check: NeedsUserPath; \
     Tasks: addtopath; Flags: preservestringtype uninsdeletevalue
 
 ; Machine PATH — added when installing for all users (admin mode)
@@ -91,21 +91,35 @@ Root: HKLM; \
     Subkey: "SYSTEM\CurrentControlSet\Control\Session Manager\Environment"; \
     ValueType: expandsz; ValueName: "Path"; \
     ValueData: "{olddata};{app}"; \
-    Check: IsAdminInstallMode and NeedsPath(HKLM, 'SYSTEM\CurrentControlSet\Control\Session Manager\Environment', ExpandConstant('{app}')); \
+    Check: NeedsMachinePath; \
     Tasks: addtopath; Flags: preservestringtype uninsdeletevalue
 
 [Code]
 // ---------------------------------------------------------------------------
-// NeedsPath — returns True if Dir is not already in the registry PATH value
+// PATH check helpers — called from [Registry] Check: parameter
 // ---------------------------------------------------------------------------
-function NeedsPath(const Root: Integer; const SubKey, Dir: string): Boolean;
+function PathContains(const Root: Integer; const SubKey, Dir: string): Boolean;
 var
   OldPath: string;
 begin
   if not RegQueryStringValue(Root, SubKey, 'Path', OldPath) then
     OldPath := '';
   Result := Pos(';' + Uppercase(Dir) + ';',
-                ';' + Uppercase(OldPath) + ';') = 0;
+                ';' + Uppercase(OldPath) + ';') > 0;
+end;
+
+function NeedsUserPath: Boolean;
+begin
+  Result := not IsAdminInstallMode and
+            not PathContains(HKCU, 'Environment', ExpandConstant('{app}'));
+end;
+
+function NeedsMachinePath: Boolean;
+begin
+  Result := IsAdminInstallMode and
+            not PathContains(HKLM,
+                'SYSTEM\CurrentControlSet\Control\Session Manager\Environment',
+                ExpandConstant('{app}'));
 end;
 
 // ---------------------------------------------------------------------------
