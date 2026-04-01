@@ -337,6 +337,12 @@ server_client_open(struct client *c, char **cause)
 	if (c->flags & CLIENT_CONTROL)
 		return (0);
 
+#ifndef PLATFORM_WINDOWS
+	/*
+	 * On Windows/ConPTY there is no controlling terminal — this guard is
+	 * meaningless and always fires because ttyname() returns the same
+	 * console device for every fd.  Skip it entirely on Windows.
+	 */
 	if (strcmp(c->ttyname, ttynam) == 0||
 	    ((isatty(STDIN_FILENO) &&
 	    (ttynam = ttyname(STDIN_FILENO)) != NULL &&
@@ -350,6 +356,9 @@ server_client_open(struct client *c, char **cause)
 		xasprintf(cause, "can't use %s", c->ttyname);
 		return (-1);
 	}
+#else
+	(void)ttynam;
+#endif
 
 	if (!(c->flags & CLIENT_TERMINAL)) {
 		*cause = xstrdup("not a terminal");

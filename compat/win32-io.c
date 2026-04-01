@@ -82,6 +82,16 @@ win32_tcgetattr(int fd, struct termios *termios_p)
         return -1;
     }
 
+    /* Socket fds (>= WINSOCK_FD_OFFSET) are not CRT fds — _get_osfhandle
+     * will assert/crash in debug CRT.  Return zeroed termios for them. */
+    if (fd >= WINSOCK_FD_OFFSET) {
+        memset(termios_p, 0, sizeof(*termios_p));
+        termios_p->c_cc[VMIN] = 1;
+        termios_p->c_cc[VTIME] = 0;
+        termios_p->c_cflag = CS8 | CREAD;
+        return 0;
+    }
+
     h = (HANDLE)_get_osfhandle(fd);
     if (h == INVALID_HANDLE_VALUE) {
         errno = EBADF;
@@ -126,6 +136,11 @@ win32_tcsetattr(int fd, int optional_actions, const struct termios *termios_p)
         errno = EINVAL;
         return -1;
     }
+
+    /* Socket fds (>= WINSOCK_FD_OFFSET) are not CRT fds — _get_osfhandle
+     * will assert/crash in debug CRT.  Nothing to set on a socket. */
+    if (fd >= WINSOCK_FD_OFFSET)
+        return 0;
 
     h = (HANDLE)_get_osfhandle(fd);
     if (h == INVALID_HANDLE_VALUE) {

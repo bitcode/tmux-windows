@@ -965,53 +965,44 @@ client_main(struct event_base *base, int argc, char **argv, uint64_t flags,
 		fatal("pledge failed");
 
 	/* Load terminfo entry if any. */
+#ifdef PLATFORM_WINDOWS
+	/*
+	 * On Windows, always inject capabilities regardless of isatty() —
+	 * attach-session may be called from a non-interactive context (e.g.
+	 * Start-Job) where isatty(STDIN_FILENO) returns false.
+	 */
+	if (termname == NULL || *termname == '\0')
+		termname = "xterm-256color";
+	win32_log("client_main: termname=%s, injecting Windows caps\n", termname);
+	caps = xreallocarray(NULL, 20, sizeof *caps);
+	ncaps = 0;
+	xasprintf(&caps[ncaps++], "clear=\033[H\033[2J");
+	xasprintf(&caps[ncaps++], "cup=\033[%%i%%p1%%d;%%p2%%dH");
+	xasprintf(&caps[ncaps++], "bel=\007");
+	xasprintf(&caps[ncaps++], "cols=80");
+	xasprintf(&caps[ncaps++], "lines=24");
+	xasprintf(&caps[ncaps++], "am=1");
+	xasprintf(&caps[ncaps++], "sgr0=\033[m");
+	xasprintf(&caps[ncaps++], "bold=\033[1m");
+	xasprintf(&caps[ncaps++], "colors=256");
+	xasprintf(&caps[ncaps++], "AX=1");
+	xasprintf(&caps[ncaps++], "XT=1");
+	xasprintf(&caps[ncaps++], "smcup=\033[?1049h");
+	xasprintf(&caps[ncaps++], "rmcup=\033[?1049l");
+	xasprintf(&caps[ncaps++], "civis=\033[?25l");
+	xasprintf(&caps[ncaps++], "cnorm=\033[?25h");
+	xasprintf(&caps[ncaps++], "rev=\033[7m");
+	xasprintf(&caps[ncaps++], "smul=\033[4m");
+	xasprintf(&caps[ncaps++], "sitm=\033[3m");
+	xasprintf(&caps[ncaps++], "setaf=\033[%%?%%p1%%{8}%%<%%t3%%p1%%d%%e%%p1%%{16}%%<%%t9%%p1%%{8}%%-%%d%%e38;5;%%p1%%d%%m");
+	xasprintf(&caps[ncaps++], "setab=\033[%%?%%p1%%{8}%%<%%t4%%p1%%d%%e%%p1%%{16}%%<%%t10%%p1%%{8}%%-%%d%%e48;5;%%p1%%d%%m");
+	win32_log("client_main: ncaps=%u\n", ncaps);
+#else
 	if (isatty(STDIN_FILENO)) {
 		if (termname == NULL || *termname == '\0')
-#ifdef PLATFORM_WINDOWS
-			termname = "xterm-256color";  /* Windows Terminal supports full xterm */
-#else
 			termname = "screen";
-#endif
-
-
-#ifdef PLATFORM_WINDOWS
-		win32_log("client_main: termname=%s\n", termname);
-#endif
-
-#ifdef PLATFORM_WINDOWS
-		if (ncaps == 0) {
-			win32_log("client_main: ncaps=0, injecting fallbacks\n");
-			/* Inject capabilities for Windows Terminal (xterm-256color compatible) */
-			caps = xreallocarray(NULL, 20, sizeof *caps);
-			ncaps = 0;
-			xasprintf(&caps[ncaps++], "clear=\033[H\033[2J");
-			xasprintf(&caps[ncaps++], "cup=\033[%%i%%p1%%d;%%p2%%dH");
-			xasprintf(&caps[ncaps++], "bel=\007");
-			xasprintf(&caps[ncaps++], "cols=80");
-			xasprintf(&caps[ncaps++], "lines=24");
-			xasprintf(&caps[ncaps++], "am=1");
-			xasprintf(&caps[ncaps++], "sgr0=\033[m");
-			xasprintf(&caps[ncaps++], "bold=\033[1m");
-			xasprintf(&caps[ncaps++], "colors=256");
-			xasprintf(&caps[ncaps++], "AX=1");
-			xasprintf(&caps[ncaps++], "XT=1");
-			/* Alternate screen — critical for hiding underlying terminal content */
-			xasprintf(&caps[ncaps++], "smcup=\033[?1049h");
-			xasprintf(&caps[ncaps++], "rmcup=\033[?1049l");
-			/* Cursor visibility */
-			xasprintf(&caps[ncaps++], "civis=\033[?25l");
-			xasprintf(&caps[ncaps++], "cnorm=\033[?25h");
-			/* Reverse video, underline, italic */
-			xasprintf(&caps[ncaps++], "rev=\033[7m");
-			xasprintf(&caps[ncaps++], "smul=\033[4m");
-			xasprintf(&caps[ncaps++], "sitm=\033[3m");
-			/* Set foreground/background (256-colour) */
-			xasprintf(&caps[ncaps++], "setaf=\033[%%?%%p1%%{8}%%<%%t3%%p1%%d%%e%%p1%%{16}%%<%%t9%%p1%%{8}%%-%%d%%e38;5;%%p1%%d%%m");
-			xasprintf(&caps[ncaps++], "setab=\033[%%?%%p1%%{8}%%<%%t4%%p1%%d%%e%%p1%%{16}%%<%%t10%%p1%%{8}%%-%%d%%e48;5;%%p1%%d%%m");
-		}
-		win32_log("client_main: tty_term_read_list success, ncaps=%u\n", ncaps);
-#endif
 	}
+#endif
 
 	/* Free stuff that is not used in the client. */
 	if (ptm_fd != -1)
