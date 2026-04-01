@@ -96,31 +96,58 @@ jobs:
         cmake -B build -DLIBEVENT_ROOT=${{ runner.temp }}/libevent-install
         cmake --build build --config Release
 
-    - name: Package release
+    - name: Build installer
       shell: pwsh
       run: |
-        $tag = "${{ github.ref_name }}"
-        $zip = "tmux-windows-${tag}.zip"
-        Compress-Archive -Path build/Release/tmux.exe, build/Release/tmux-signal-proxy.exe -DestinationPath $zip
-        echo "ZIP=$zip" >> $env:GITHUB_ENV
+        New-Item -ItemType Directory -Force dist | Out-Null
+        $ver = "${{ github.ref_name }}" -replace '^v', ''
+        & "C:\Program Files (x86)\Inno Setup 6\iscc.exe" `
+            /DAppVersion=$ver `
+            installer\tmux-windows.iss
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        dir dist\
+
+    - name: Package ZIP
+      shell: pwsh
+      run: |
+        $ver = "${{ github.ref_name }}" -replace '^v', ''
+        Compress-Archive -Path build/Release/tmux.exe, build/Release/tmux-signal-proxy.exe `
+            -DestinationPath "dist\tmux-windows-${ver}.zip"
 
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
       with:
-        files: ${{ env.ZIP }}
+        files: |
+          dist/*.exe
+          dist/*.zip
         generate_release_notes: true
         body: |
           ## tmux for Windows ${{ github.ref_name }}
 
-          ### Installation
+          ### Easy Install (recommended)
 
-          1. Download `tmux-windows-${{ github.ref_name }}.zip`
-          2. Extract both files to a directory on your `PATH`
-          3. Both `tmux.exe` and `tmux-signal-proxy.exe` must be in the same directory
+          Download **`tmux-windows-${{ github.ref_name }}-setup.exe`** and run it.
+
+          The installer offers two modes:
+          - **Install for me only** — no administrator privileges required, installs to `%LOCALAPPDATA%\Programs\tmux`
+          - **Install for all users** — requires administrator (UAC prompt), installs to `%ProgramFiles%\tmux`
+
+          Both modes add `tmux` to your `PATH` automatically and register an uninstaller
+          in "Add or Remove Programs".
+
+          ### Manual Install (ZIP)
+
+          Download **`tmux-windows-${{ github.ref_name }}.zip`**, extract both files to a
+          directory on your `PATH`. Both `tmux.exe` and `tmux-signal-proxy.exe` must be
+          in the same directory.
 
           ### Requirements
           - Windows 10 build 17763 (version 1809) or later
-          - Windows Terminal recommended
+          - [Windows Terminal](https://aka.ms/terminal) recommended
 
           ### Config
           Config file: `%APPDATA%\tmux\tmux.conf`
+
+          ### Upgrading
+          Run the new installer — it will overwrite the previous version automatically.
+          If tmux is running, the installer will prompt you to close it first.
