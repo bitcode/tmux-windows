@@ -135,30 +135,31 @@ begin
 end;
 
 // ---------------------------------------------------------------------------
-// Remove a specific directory from a PATH registry value
+// Remove a specific directory from a PATH registry value.
+// Splits on ';', filters out the target (case-insensitive), rejoins.
 // ---------------------------------------------------------------------------
 procedure RemoveFromPath(const Root: Integer; const SubKey, Dir: string);
 var
-  OldPath, NewPath, DirUp, Entry: string;
-  i, Start, Sep: Integer;
+  OldPath, NewPath, Remaining, Entry: string;
+  Sep: Integer;
+  DirUp: string;
 begin
   if not RegQueryStringValue(Root, SubKey, 'Path', OldPath) then
     Exit;
-  DirUp  := Uppercase(Dir);
-  OldPath := OldPath + ';';   // sentinel so every entry ends with ;
-  NewPath := '';
-  Start  := 1;
+  DirUp     := Uppercase(Dir);
+  Remaining := OldPath + ';';  // sentinel — every entry ends with ;
+  NewPath   := '';
   repeat
-    Sep  := Pos(';', OldPath, Start);
+    Sep := Pos(';', Remaining);
     if Sep = 0 then Break;
-    Entry := Copy(OldPath, Start, Sep - Start);
-    Start := Sep + 1;
+    Entry     := Copy(Remaining, 1, Sep - 1);
+    Remaining := Copy(Remaining, Sep + 1, Length(Remaining));
     if (Entry <> '') and (Uppercase(Entry) <> DirUp) then
     begin
       if NewPath <> '' then NewPath := NewPath + ';';
       NewPath := NewPath + Entry;
     end;
-  until Start > Length(OldPath);
+  until Remaining = '';
   RegWriteStringValue(Root, SubKey, 'Path', NewPath);
 end;
 
