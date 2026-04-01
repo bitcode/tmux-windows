@@ -131,7 +131,9 @@ var
   S: string;
 begin
   S := 'Environment';
-  SendBroadcastMessage($001A {WM_SETTINGCHANGE}, 0, CastStringToInteger(S));
+  // PostBroadcastMessage is async — returns immediately without waiting for
+  // every top-level window to respond, so it cannot hang the installer.
+  PostBroadcastMessage($001A {WM_SETTINGCHANGE}, 0, CastStringToInteger(S));
 end;
 
 // ---------------------------------------------------------------------------
