@@ -69,6 +69,52 @@ static struct client_files client_files = RB_INITIALIZER(&client_files);
 static DWORD		 client_saved_stdin_mode = 0;
 static DWORD		 client_saved_stdout_mode = 0;
 static int		 client_console_mode_saved = 0;
+
+/*
+ * Return a true console input handle.  PowerShell 7 under Windows Terminal
+ * redirects STD_INPUT_HANDLE to a pipe, which breaks ReadConsoleInputW.
+ * Opening CONIN$ directly always gives the real console.
+ */
+static HANDLE
+client_console_in(void)
+{
+	static HANDLE h = INVALID_HANDLE_VALUE;
+
+	if (h == INVALID_HANDLE_VALUE) {
+		h = CreateFileW(L"CONIN$", GENERIC_READ | GENERIC_WRITE,
+		    FILE_SHARE_READ | FILE_SHARE_WRITE,
+		    NULL, OPEN_EXISTING, 0, NULL);
+		if (h == INVALID_HANDLE_VALUE) {
+			h = GetStdHandle(STD_INPUT_HANDLE);
+			win32_log("client_console_in: CONIN$ failed, "
+			    "falling back to GetStdHandle: %p\n", h);
+		} else {
+			win32_log("client_console_in: opened CONIN$: %p\n", h);
+		}
+	}
+	return (h);
+}
+
+static HANDLE
+client_console_out(void)
+{
+	static HANDLE h = INVALID_HANDLE_VALUE;
+
+	if (h == INVALID_HANDLE_VALUE) {
+		h = CreateFileW(L"CONOUT$", GENERIC_READ | GENERIC_WRITE,
+		    FILE_SHARE_READ | FILE_SHARE_WRITE,
+		    NULL, OPEN_EXISTING, 0, NULL);
+		if (h == INVALID_HANDLE_VALUE) {
+			h = GetStdHandle(STD_OUTPUT_HANDLE);
+			win32_log("client_console_out: CONOUT$ failed, "
+			    "falling back to GetStdHandle: %p\n", h);
+		} else {
+			win32_log("client_console_out: opened CONOUT$: %p\n",
+			    h);
+		}
+	}
+	return (h);
+}
 #endif
 
 static __dead void	 client_exec(const char *,const char *);
@@ -95,7 +141,7 @@ client_resize_thread(void *arg)
 	free(a);
 
 	/* Record initial size */
-	if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi)) {
+	if (GetConsoleScreenBufferInfo(client_console_out(), &csbi)) {
 		last_cols = csbi.srWindow.Right - csbi.srWindow.Left + 1;
 		last_rows = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
 	}
@@ -106,7 +152,7 @@ client_resize_thread(void *arg)
 	while (1) {
 		Sleep(250);
 
-		if (!GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi))
+		if (!GetConsoleScreenBufferInfo(client_console_out(), &csbi))
 			continue;
 
 		SHORT cols = csbi.srWindow.Right - csbi.srWindow.Left + 1;
@@ -295,7 +341,7 @@ unsigned int __stdcall
 client_input_thread(void *arg)
 {
 	int	fd = (intptr_t)arg;
-	HANDLE	hIn = GetStdHandle(STD_INPUT_HANDLE);
+	HANDLE	hIn = client_console_in();
 	INPUT_RECORD irec[32];
 	DWORD	nevents, i;
 	char	buf[512];  /* accumulate output before write */
@@ -367,7 +413,7 @@ unsigned int __stdcall
 client_tty_egress_thread(void *arg)
 {
 	SOCKET	sock = (SOCKET)(uintptr_t)arg;
-	HANDLE	hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+	HANDLE	hOut = client_console_out();
 	char	buf[4096];
 	int	n;
 
@@ -402,7 +448,7 @@ unsigned int __stdcall
 client_tty_ingress_thread(void *arg)
 {
 	SOCKET		sock = (SOCKET)(uintptr_t)arg;
-	HANDLE		hIn = GetStdHandle(STD_INPUT_HANDLE);
+	HANDLE		hIn = client_console_in();
 	INPUT_RECORD	irec[32];
 	DWORD		nevents, i;
 	char		buf[512];
@@ -543,7 +589,7 @@ client_resize_callback(__unused int fd_ignore, __unused short events, void *arg)
 		CONSOLE_SCREEN_BUFFER_INFO csbi;
 
 		memset(&ws, 0, sizeof ws);
-		if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi)) {
+		if (GetConsoleScreenBufferInfo(client_console_out(), &csbi)) {
 			ws.ws_col = csbi.srWindow.Right - csbi.srWindow.Left + 1;
 			ws.ws_row = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
 			if (ws.ws_col < 10) ws.ws_col = 10;
@@ -1087,8 +1133,8 @@ client_main(struct event_base *base, int argc, char **argv, uint64_t flags,
 #ifdef PLATFORM_WINDOWS
 	/* Restore console modes so the shell is usable after detach. */
 	if (client_console_mode_saved) {
-		HANDLE hIn  = GetStdHandle(STD_INPUT_HANDLE);
-		HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+		HANDLE hIn  = client_console_in();
+		HANDLE hOut = client_console_out();
 		if (hIn  != INVALID_HANDLE_VALUE) SetConsoleMode(hIn,  client_saved_stdin_mode);
 		if (hOut != INVALID_HANDLE_VALUE) SetConsoleMode(hOut, client_saved_stdout_mode);
 	}
@@ -1149,10 +1195,10 @@ client_send_identify(const char *ttynam, const char *termname, char **caps,
 	 * - Output: Enable VT processing so escape sequences are rendered
 	 * - Input: Disable line mode/echo (raw mode), enable VT sequences
 	 */
-	HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
-	HANDLE hIn = GetStdHandle(STD_INPUT_HANDLE);
+	HANDLE hOut = client_console_out();
+	HANDLE hIn = client_console_in();
 	DWORD dwMode = 0;
-	
+
 	/* Configure stdout for VT processing */
 	if (GetConsoleMode(hOut, &dwMode)) {
 		client_saved_stdout_mode = dwMode;
@@ -1206,10 +1252,10 @@ client_send_identify(const char *ttynam, const char *termname, char **caps,
 	CONSOLE_SCREEN_BUFFER_INFO csbi;
 
 	memset(&ws, 0, sizeof ws);
-	if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi)) {
+	if (GetConsoleScreenBufferInfo(client_console_out(), &csbi)) {
 		ws.ws_col = csbi.srWindow.Right - csbi.srWindow.Left + 1;
 		ws.ws_row = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
-		
+
 		/* Enforce minimum size to prevent rendering issues */
 		if (ws.ws_col < 80)
 			ws.ws_col = 80;
