@@ -449,59 +449,110 @@ client_tty_ingress_thread(void *arg)
 {
 	SOCKET		sock = (SOCKET)(uintptr_t)arg;
 	HANDLE		hIn = client_console_in();
-	INPUT_RECORD	irec[32];
-	DWORD		nevents, i;
-	char		buf[512];
-	int		buflen;
+	char		buf[4096];
+	DWORD		nread;
+	int		use_vt_input = 0;
 
 	win32_log("client_tty_ingress_thread: started sock=%llu hIn=%p\n",
 	    (unsigned long long)sock, hIn);
 
-	while (1) {
-		if (!ReadConsoleInputW(hIn, irec,
-		    sizeof irec / sizeof irec[0], &nevents)) {
-			win32_log("client_tty_ingress_thread: ReadConsoleInputW"
-			    " failed: %lu\n", GetLastError());
-			break;
+	/*
+	 * Check if ENABLE_VIRTUAL_TERMINAL_INPUT is active (Windows Terminal
+	 * enables this).  In VT input mode, ReadConsoleInputW delivers VT
+	 * sequences as individual character KEY_EVENTs with vk=0, which
+	 * splits multi-byte sequences (e.g. ESC [ D for left-arrow) across
+	 * separate events.  ReadFile on the console handle returns the raw
+	 * VT bytes as contiguous strings — exactly what tmux needs.
+	 */
+	{
+		DWORD mode = 0;
+		if (GetConsoleMode(hIn, &mode)) {
+			win32_log("client_tty_ingress_thread: console mode=0x%lx\n",
+			    mode);
+			if (mode & ENABLE_VIRTUAL_TERMINAL_INPUT)
+				use_vt_input = 1;
 		}
+	}
+	win32_log("client_tty_ingress_thread: use_vt_input=%d\n", use_vt_input);
 
-		buflen = 0;
-		for (i = 0; i < nevents; i++) {
-			char tmp[32];
-			int  n = 0;
+	if (use_vt_input) {
+		/*
+		 * VT input mode: ReadFile returns raw VT byte sequences.
+		 * This is the preferred path for modern terminals.
+		 */
+		while (1) {
+			if (!ReadFile(hIn, buf, sizeof buf, &nread, NULL)) {
+				win32_log("client_tty_ingress_thread: ReadFile"
+				    " failed: %lu\n", GetLastError());
+				break;
+			}
+			if (nread == 0)
+				break;
+			if (send(sock, buf, (int)nread, 0) == SOCKET_ERROR) {
+				win32_log("client_tty_ingress_thread: send"
+				    " failed: %d\n", WSAGetLastError());
+				break;
+			}
+		}
+	} else {
+		/*
+		 * Legacy input mode: use ReadConsoleInputW + vk_to_vt
+		 * translation for consoles without VT input support.
+		 */
+		INPUT_RECORD	irec[32];
+		DWORD		nevents, i;
+		int		buflen;
 
-			switch (irec[i].EventType) {
-			case KEY_EVENT:
-				if (!irec[i].Event.KeyEvent.bKeyDown)
+		while (1) {
+			if (!ReadConsoleInputW(hIn, irec,
+			    sizeof irec / sizeof irec[0], &nevents)) {
+				win32_log("client_tty_ingress_thread:"
+				    " ReadConsoleInputW failed: %lu\n",
+				    GetLastError());
+				break;
+			}
+
+			buflen = 0;
+			for (i = 0; i < nevents; i++) {
+				char tmp[32];
+				int  n = 0;
+
+				switch (irec[i].EventType) {
+				case KEY_EVENT:
+					if (!irec[i].Event.KeyEvent.bKeyDown)
+						break;
+					n = vk_to_vt(
+					    &irec[i].Event.KeyEvent,
+					    tmp, sizeof tmp);
 					break;
-				n = vk_to_vt(&irec[i].Event.KeyEvent,
-				    tmp, sizeof tmp);
-				break;
-			case MOUSE_EVENT:
-				n = mouse_to_sgr(&irec[i].Event.MouseEvent,
-				    tmp, sizeof tmp);
-				break;
-			default:
-				break;
-			}
-
-			if (n > 0) {
-				if (buflen + n > (int)sizeof buf) {
-					send(sock, buf, buflen, 0);
-					buflen = 0;
+				case MOUSE_EVENT:
+					n = mouse_to_sgr(
+					    &irec[i].Event.MouseEvent,
+					    tmp, sizeof tmp);
+					break;
+				default:
+					break;
 				}
-				memcpy(buf + buflen, tmp, n);
-				buflen += n;
-			}
-		}
 
-		if (buflen > 0) {
-			win32_log("client_tty_ingress_thread: sending %d bytes\n",
-			    buflen);
-			if (send(sock, buf, buflen, 0) == SOCKET_ERROR) {
-				win32_log("client_tty_ingress_thread: send failed:"
-				    " %d\n", WSAGetLastError());
-				break;
+				if (n > 0) {
+					if (buflen + n > (int)sizeof buf) {
+						send(sock, buf, buflen, 0);
+						buflen = 0;
+					}
+					memcpy(buf + buflen, tmp, n);
+					buflen += n;
+				}
+			}
+
+			if (buflen > 0) {
+				if (send(sock, buf, buflen, 0) ==
+				    SOCKET_ERROR) {
+					win32_log(
+					    "client_tty_ingress_thread:"
+					    " send failed: %d\n",
+					    WSAGetLastError());
+					break;
+				}
 			}
 		}
 	}
@@ -1040,8 +1091,8 @@ client_main(struct event_base *base, int argc, char **argv, uint64_t flags,
 	xasprintf(&caps[ncaps++], "rev=\033[7m");
 	xasprintf(&caps[ncaps++], "smul=\033[4m");
 	xasprintf(&caps[ncaps++], "sitm=\033[3m");
-	xasprintf(&caps[ncaps++], "setaf=\033[%%?%%p1%%{8}%%<%%t3%%p1%%d%%e%%p1%%{16}%%<%%t9%%p1%%{8}%%-%%d%%e38;5;%%p1%%d%%m");
-	xasprintf(&caps[ncaps++], "setab=\033[%%?%%p1%%{8}%%<%%t4%%p1%%d%%e%%p1%%{16}%%<%%t10%%p1%%{8}%%-%%d%%e48;5;%%p1%%d%%m");
+	xasprintf(&caps[ncaps++], "setaf=\033[%%?%%p1%%{8}%%<%%t3%%p1%%d%%e%%p1%%{16}%%<%%t9%%p1%%{8}%%-%%d%%e38;5;%%p1%%d%%;m");
+	xasprintf(&caps[ncaps++], "setab=\033[%%?%%p1%%{8}%%<%%t4%%p1%%d%%e%%p1%%{16}%%<%%t10%%p1%%{8}%%-%%d%%e48;5;%%p1%%d%%;m");
 	win32_log("client_main: ncaps=%u\n", ncaps);
 #else
 	if (isatty(STDIN_FILENO)) {
