@@ -871,4 +871,7 @@ pid_t win32_spawn_process(int *, struct tty *, struct winsize *, int, char **, s
 #undef msg_controllen
 #endif
 
+/* osdep-win32.c — parent shell detection */
+const char *win32_get_parent_shell(void);
+
 #endif /* COMPAT_WIN32_H */

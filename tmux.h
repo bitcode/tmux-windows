@@ -2906,7 +2906,7 @@ int	 server_start(struct tmuxproc *, uint64_t, struct event_base *, int,
 	     char *);
 void	 server_update_socket(void);
 void	 server_add_accept(int);
-void server_child_main(struct tmuxproc *, uint64_t, struct event_base *, int, char *);
+void server_child_main(struct tmuxproc *, uint64_t, struct event_base *, int, char *, const char *);
 void printflike(1, 2) server_add_message(const char *, ...);
 int	 server_create_socket(uint64_t, char **);
 

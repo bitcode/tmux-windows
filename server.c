@@ -214,14 +214,28 @@ server_start(struct tmuxproc *client, uint64_t flags, struct event_base *base,
 #ifdef PLATFORM_WINDOWS
     /* Windows implementation: Spawn new process */
     char *cmdline;
-    // Construct command line: tmux.exe -S socket_path __win32_server
-    // We need our own executable path.
     char exe_path[MAX_PATH];
     GetModuleFileNameA(NULL, exe_path, MAX_PATH);
-#ifdef PLATFORM_WINDOWS
     win32_log("server_start: exe_path=%s\n", exe_path);
-#endif
-    
+
+    /*
+     * Create a named event so the client can wait for the server to
+     * finish bind()+listen() instead of using a fixed Sleep().  The
+     * event name is passed on the command line; the server opens it
+     * by name and signals it once the listening socket is ready.
+     */
+    char evname[64];
+    HANDLE ready_event;
+    snprintf(evname, sizeof evname, "tmux-ready-%lu",
+        (unsigned long)GetCurrentProcessId());
+    ready_event = CreateEventA(NULL, TRUE, FALSE, evname);
+    if (ready_event == NULL) {
+        win32_log("server_start: CreateEvent failed %lu\n",
+            (unsigned long)GetLastError());
+        sigprocmask(SIG_SETMASK, &oldset, NULL);
+        return -1;
+    }
+
     /* Build command line, forwarding -f config files and -S socket path. */
     {
         char *p = NULL;
@@ -234,7 +248,6 @@ server_start(struct tmuxproc *client, uint64_t flags, struct event_base *base,
             free(p);
             p = tmp;
         }
-        /* Forward any -f config file overrides to the server process. */
         for (i = 0; i < cfg_nfiles; i++) {
             char *tmp;
             xasprintf(&tmp, "%s -f \"%s\"", p, cfg_files[i]);
@@ -243,15 +256,13 @@ server_start(struct tmuxproc *client, uint64_t flags, struct event_base *base,
         }
         {
             char *tmp;
-            xasprintf(&tmp, "%s __win32_server", p);
+            xasprintf(&tmp, "%s __win32_server %s", p, evname);
             free(p);
             cmdline = tmp;
         }
     }
 
-#ifdef PLATFORM_WINDOWS
     win32_log("server_start: cmdline=%s\n", cmdline);
-#endif
 
     STARTUPINFOA si;
     PROCESS_INFORMATION pi;
@@ -259,43 +270,43 @@ server_start(struct tmuxproc *client, uint64_t flags, struct event_base *base,
     si.cb = sizeof(si);
     memset(&pi, 0, sizeof(pi));
 
-    // Release lock before spawning?
-    // Parent holds lock (lockfd).
-    // If we spawn, child runs main -> ... -> open lock -> flock.
-    // Child blocks.
-    // Parent spawns.
-    // Parent closes lockfd.
-    // Child unblocks.
-    // Child creates socket.
-    // Parent waits for socket.
-    
     /* Do NOT inherit handles: the client's stdout/stderr pipes (from
      * Start-Process -RedirectStandardOutput) must not leak into the server
      * process, or the pipe will never reach EOF and callers will hang. */
     if (!CreateProcessA(NULL, cmdline, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
-#ifdef PLATFORM_WINDOWS
-        win32_log("server_start: CreateProcess failed %d\n", GetLastError());
-#endif
+        win32_log("server_start: CreateProcess failed %lu\n",
+            (unsigned long)GetLastError());
         free(cmdline);
+        CloseHandle(ready_event);
         sigprocmask(SIG_SETMASK, &oldset, NULL);
         return -1;
     }
-#ifdef PLATFORM_WINDOWS
-    win32_log("server_start: child pid %d\n", pi.dwProcessId);
-#endif
+    win32_log("server_start: child pid %lu\n",
+        (unsigned long)pi.dwProcessId);
     free(cmdline);
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
 
-    // Release lock so child can proceed
+    /*
+     * Wait for the server to signal readiness (bind+listen done)
+     * instead of a fixed Sleep(300).  Fall back to 5s timeout so we
+     * don't hang forever if the server crashes during init.
+     */
+    DWORD wait_result = WaitForSingleObject(ready_event, 5000);
+    CloseHandle(ready_event);
+    if (wait_result == WAIT_OBJECT_0) {
+        win32_log("server_start: server signalled ready\n");
+    } else {
+        win32_log("server_start: ready-event wait returned %lu "
+            "(timeout or error)\n", (unsigned long)wait_result);
+    }
+
     if (lockfd >= 0) {
-#ifdef PLATFORM_WINDOWS
         win32_log("server_start: NOT closing lockfd here, letting caller handle it\n");
-#endif
     }
 
     sigprocmask(SIG_SETMASK, &oldset, NULL);
-    return 0; // Return 0 to indicate spawn success. Caller will retry connect.
+    return 0;
 
 #else /* POSIX implementation */
 
@@ -306,7 +317,7 @@ server_start(struct tmuxproc *client, uint64_t flags, struct event_base *base,
 		}
 	}
 	// ... continue in child ...
-    server_child_main(client, flags, base, lockfd, lockfile);
+    server_child_main(client, flags, base, lockfd, lockfile, NULL);
     // server_child_main exits logic?
     exit(0);
 #endif
@@ -315,7 +326,7 @@ server_start(struct tmuxproc *client, uint64_t flags, struct event_base *base,
 /* Extracted child logic */
 void
 server_child_main(struct tmuxproc *client, uint64_t flags, struct event_base *base,
-     int lockfd, char *lockfile)
+     int lockfd, char *lockfile, const char *ready_event_name)
 {
 	int		 fd = -1; // No FD passing on Windows/Child?
     // Wait. On POSIX `fd` comes from `proc_fork_and_daemon`.
@@ -449,6 +460,26 @@ server_child_main(struct tmuxproc *client, uint64_t flags, struct event_base *ba
 
 	server_add_accept(0);
 #ifdef PLATFORM_WINDOWS
+    /*
+     * Signal the client that the listening socket is ready.
+     * The client created a named event and passed its name on the
+     * command line; we open it by name and set it.  This replaces
+     * the old Sleep(300) + retry loop.
+     */
+    if (ready_event_name != NULL) {
+        HANDLE ev = OpenEventA(EVENT_MODIFY_STATE, FALSE,
+            ready_event_name);
+        if (ev != NULL) {
+            SetEvent(ev);
+            CloseHandle(ev);
+            win32_log("server_child_main: signalled ready event '%s'\n",
+                ready_event_name);
+        } else {
+            win32_log("server_child_main: OpenEvent('%s') failed %lu\n",
+                ready_event_name, (unsigned long)GetLastError());
+        }
+    }
+
     if (win32_job_init() != 0)
         win32_log("server_child_main: win32_job_init failed (if-shell will not work)\n");
     win32_session_log_init();

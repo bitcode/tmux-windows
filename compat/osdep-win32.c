@@ -369,6 +369,35 @@ win32_get_child_pids(DWORD ppid, DWORD *pids, int max_pids)
 }
 
 /*
+ * Get the full executable path of the parent process.
+ * Used to auto-detect the launching shell (e.g., pwsh.exe, cmd.exe).
+ * Returns a static buffer, or NULL on failure.
+ */
+const char *
+win32_get_parent_shell(void)
+{
+    static char path[MAX_PATH];
+    DWORD ppid, len;
+    HANDLE hp;
+
+    ppid = win32_get_parent_pid(GetCurrentProcessId());
+    if (ppid == 0)
+        return NULL;
+
+    hp = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, ppid);
+    if (hp == NULL)
+        return NULL;
+
+    len = MAX_PATH;
+    if (!QueryFullProcessImageNameA(hp, 0, path, &len)) {
+        CloseHandle(hp);
+        return NULL;
+    }
+    CloseHandle(hp);
+    return path;
+}
+
+/*
  * Get username
  */
 char *

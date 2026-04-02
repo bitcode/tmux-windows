@@ -830,30 +830,30 @@ retry:
 #ifdef PLATFORM_WINDOWS
     server_started = 1;
     retry_count = 0;
-    win32_log("client_connect: server_start success, retrying connect\n");
-    Sleep(300); /* Give server a moment to bind */
+    win32_log("client_connect: server_start success (ready-event waited), retrying connect\n");
+    /* server_start() already waited for the server's ready event,
+     * so the listening socket should be active — no Sleep() needed. */
 #endif
     goto retry;
 	} else {
 #ifdef PLATFORM_WINDOWS
-        /* connect() succeeded — but if we're in a post-server_start retry loop,
-         * the server may have accepted and immediately dropped us (race).
-         * Break out: fall through to the success path below. */
-        server_started = 0; /* stop retry guard */
+        server_started = 0;
 #endif
     }
 #ifdef PLATFORM_WINDOWS
-    /* connect() failed and server was already started — wait and retry */
+    /* connect() failed after server was started — short retry in case the
+     * ready-event fired but the kernel hasn't completed the listen backlog
+     * setup yet (extremely unlikely, but be safe). */
     if (server_started) {
         retry_count++;
-        if (retry_count > 20) {
+        if (retry_count > 5) {
             win32_log("client_connect: server started but connect still failing after %d retries\n", retry_count);
             goto failed;
         }
-        win32_log("client_connect: server started, connect retry %d/20\n", retry_count);
+        win32_log("client_connect: server started, connect retry %d/5\n", retry_count);
         close(fd);
         fd = -1;
-        Sleep(200);
+        Sleep(50);
         goto retry;
     }
 #endif

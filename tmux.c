@@ -435,6 +435,22 @@ main(int argc, char **argv)
     win32_log("PWD set\n");
 #endif
 #ifdef PLATFORM_WINDOWS
+    /*
+     * Auto-detect the launching shell so panes inherit it.
+     * On Unix, $SHELL is always set.  On Windows it usually isn't,
+     * so query the parent process executable and set SHELL if needed.
+     * This flows through getshell() → default-shell → spawn_pane().
+     */
+    if (getenv("SHELL") == NULL) {
+        const char *parent = win32_get_parent_shell();
+        if (parent != NULL) {
+            win32_log("auto-detected parent shell: %s\n", parent);
+            setenv("SHELL", parent, 0);
+            environ_set(global_environ, "SHELL", 0, "%s", parent);
+        }
+    }
+#endif
+#ifdef PLATFORM_WINDOWS
     {
         /* On Windows use %APPDATA%\tmux\tmux.conf as the default config path.
          * expand_paths with no_realpath=1 keeps non-existent paths so the
@@ -663,23 +679,24 @@ main(int argc, char **argv)
         win32_log("Starting server_child_main\n");
         int lockfd = -1;
         char *lockfile = NULL;
-        
-        // We need to acquire lock to behave like server_start(child) expectation?
-        // server_child_main takes lockfd.
-        // And it unlinks/closes it.
-        // So we SHOULD open it.
+        const char *ready_event_name = NULL;
+
+        /* argv[1] is the optional ready-event name from server_start(). */
+        if (argc > 1 && argv[1] != NULL)
+            ready_event_name = argv[1];
+
         if (socket_path) {
             xasprintf(&lockfile, "%s.lock", socket_path);
             lockfd = open(lockfile, O_WRONLY|O_CREAT, 0600);
             if (lockfd != -1) {
                  if (flock(lockfd, LOCK_EX) == -1) {
-                     // Failed to lock
                      close(lockfd);
                      lockfd = -1;
                  }
             }
         }
-        server_child_main(NULL, 0, base, lockfd, lockfile); // client=NULL, flags=0?
+        server_child_main(NULL, 0, base, lockfd, lockfile,
+            ready_event_name);
         exit(0);
     }
 #endif
