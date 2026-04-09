@@ -103,6 +103,7 @@ set(WIN32_LIBRARIES
     user32
     shell32
     kernel32
+    wtsapi32
 )
 
 # Source files from Makefile.am

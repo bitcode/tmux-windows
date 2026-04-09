@@ -815,6 +815,9 @@ SOCKET win32_from_map(int fd);
 /* Fake fd offset: socket fds start at this value, above CRT fd space. */
 #define WINSOCK_FD_OFFSET 2000
 
+/* Config fallback for elevated sessions (Run as different user) */
+int  win32_get_session_user_config(char *buf, size_t buflen);
+
 /*
  * Error handling
  */

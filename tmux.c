@@ -452,15 +452,28 @@ main(int argc, char **argv)
 #endif
 #ifdef PLATFORM_WINDOWS
     {
-        /* On Windows use %APPDATA%\tmux\tmux.conf as the default config path.
-         * expand_paths with no_realpath=1 keeps non-existent paths so the
-         * server will attempt to load the file when it does exist. */
+        /*
+         * On Windows use %APPDATA%\tmux\tmux.conf as the default config.
+         * If the current user has no config (common when running elevated
+         * as a different admin account), fall back to the interactive
+         * session owner's config so settings carry over transparently.
+         */
         const char *appdata = getenv("APPDATA");
         if (appdata != NULL && appdata[0] != '\0') {
             char win_conf[MAX_PATH];
+            char fallback[MAX_PATH];
             snprintf(win_conf, sizeof(win_conf), "%s\\tmux\\tmux.conf", appdata);
-            cfg_files = xreallocarray(cfg_files, cfg_nfiles + 1, sizeof *cfg_files);
-            cfg_files[cfg_nfiles++] = xstrdup(win_conf);
+            if (_access(win_conf, 0) == 0) {
+                cfg_files = xreallocarray(cfg_files, cfg_nfiles + 1, sizeof *cfg_files);
+                cfg_files[cfg_nfiles++] = xstrdup(win_conf);
+            } else if (win32_get_session_user_config(fallback, sizeof(fallback))) {
+                cfg_files = xreallocarray(cfg_files, cfg_nfiles + 1, sizeof *cfg_files);
+                cfg_files[cfg_nfiles++] = xstrdup(fallback);
+            } else {
+                /* No config anywhere — keep original path (silent miss). */
+                cfg_files = xreallocarray(cfg_files, cfg_nfiles + 1, sizeof *cfg_files);
+                cfg_files[cfg_nfiles++] = xstrdup(win_conf);
+            }
         }
     }
     win32_log("expand_paths (Windows) done\n");

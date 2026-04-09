@@ -7,6 +7,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <wtsapi32.h>
+#include <sddl.h>
 
 #ifdef getenv
 #undef getenv
@@ -566,5 +568,114 @@ win32_rmdir(const char *path)
 
     p = win32_translate_path(path);
     return _rmdir(p);
+}
+
+/*
+ * Get the interactive session user's tmux config path.
+ * When tmux runs elevated as a different user (e.g., "Run as different user"),
+ * the current user's %APPDATA% has no tmux.conf. Fall back to the desktop
+ * session owner's config so elevated shells inherit the real user's settings.
+ *
+ * Returns 1 and fills buf if a config was found, 0 otherwise.
+ */
+int
+win32_get_session_user_config(char *buf, size_t buflen)
+{
+	DWORD sessionId;
+	char *sessionUser = NULL;
+	DWORD sessionUserLen = 0;
+	char currentUser[256];
+	DWORD currentUserLen = sizeof(currentUser);
+	BYTE sidBuf[SECURITY_MAX_SID_SIZE];
+	DWORD sidSize = sizeof(sidBuf);
+	char domain[256];
+	DWORD domainSize = sizeof(domain);
+	SID_NAME_USE sidType;
+	char *sidStr = NULL;
+	HKEY hKey = NULL;
+	char profilePath[MAX_PATH];
+	DWORD profilePathLen = sizeof(profilePath);
+	DWORD profilePathType = 0;
+	char regKey[512];
+	char expanded[MAX_PATH];
+
+	/* Get current process session ID. */
+	if (!ProcessIdToSessionId(GetCurrentProcessId(), &sessionId))
+		return (0);
+
+	/* Get the username that owns this desktop session. */
+	if (!WTSQuerySessionInformationA(WTS_CURRENT_SERVER_HANDLE, sessionId,
+	    WTSUserName, &sessionUser, &sessionUserLen))
+		return (0);
+
+	if (sessionUser == NULL || sessionUser[0] == '\0') {
+		WTSFreeMemory(sessionUser);
+		return (0);
+	}
+
+	/* Get current process username. */
+	if (!GetUserNameA(currentUser, &currentUserLen)) {
+		WTSFreeMemory(sessionUser);
+		return (0);
+	}
+
+	/* Same user — no fallback needed. */
+	if (_stricmp(currentUser, sessionUser) == 0) {
+		WTSFreeMemory(sessionUser);
+		return (0);
+	}
+
+	win32_log("config fallback: process user '%s', session user '%s'\n",
+	    currentUser, sessionUser);
+
+	/* Resolve session user's SID. */
+	if (!LookupAccountNameA(NULL, sessionUser, sidBuf, &sidSize,
+	    domain, &domainSize, &sidType)) {
+		WTSFreeMemory(sessionUser);
+		return (0);
+	}
+	WTSFreeMemory(sessionUser);
+
+	/* Convert SID to string for registry lookup. */
+	if (!ConvertSidToStringSidA((PSID)sidBuf, &sidStr))
+		return (0);
+
+	/* Read profile path from the ProfileList registry key. */
+	snprintf(regKey, sizeof(regKey),
+	    "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList\\%s",
+	    sidStr);
+	LocalFree(sidStr);
+
+	if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, regKey, 0, KEY_READ,
+	    &hKey) != ERROR_SUCCESS)
+		return (0);
+
+	if (RegQueryValueExA(hKey, "ProfileImagePath", NULL, &profilePathType,
+	    (LPBYTE)profilePath, &profilePathLen) != ERROR_SUCCESS) {
+		RegCloseKey(hKey);
+		return (0);
+	}
+	RegCloseKey(hKey);
+
+	/* Expand environment variables (e.g., %SystemDrive%). */
+	if (profilePathType == REG_EXPAND_SZ) {
+		if (ExpandEnvironmentStringsA(profilePath, expanded,
+		    sizeof(expanded)) == 0)
+			strncpy(expanded, profilePath, sizeof(expanded) - 1);
+	} else {
+		strncpy(expanded, profilePath, sizeof(expanded) - 1);
+	}
+	expanded[sizeof(expanded) - 1] = '\0';
+
+	/* Build config path: <profile>\AppData\Roaming\tmux\tmux.conf */
+	snprintf(buf, buflen, "%s\\AppData\\Roaming\\tmux\\tmux.conf", expanded);
+
+	if (_access(buf, 0) != 0) {
+		win32_log("config fallback: not found: %s\n", buf);
+		return (0);
+	}
+
+	win32_log("config fallback: using %s\n", buf);
+	return (1);
 }
 
